@@ -33,7 +33,7 @@ app = Flask(__name__)
 pending_requests = Queue()
 
 # Load API key from environment variables
-API_KEY = os.environ.get('API_KEY')
+API_KEY = os.environ.get('TWILIO_API_KEY')
 
 def handle_requests():
     """

@@ -1,6 +1,6 @@
 # Dockerfile for Twilio SMS Business Finder
 # From official Python image as the base image
-FROM python:3.9-alpine
+FROM python:3.11.4-alpine
 
 # Set environment variables
 ENV PYTHONUNBUFFERED 1
