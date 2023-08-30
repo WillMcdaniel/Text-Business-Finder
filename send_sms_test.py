@@ -1,5 +1,4 @@
 import logging
-
 from dotenv import load_dotenv
 from urllib.parse import urlencode
 from flask import Flask, request
@@ -46,9 +45,6 @@ def get_json_data(user_address):
     url_params = urlencode(params)
     url = f'{endpoint}?{url_params}'
 
-    # sample = 'https: // maps.googleapis.com / maps / api / geocode / json?address = 1600 + Amphitheatre + Parkway,
-    # +Mountain + View, +CA & key = YOUR_API_KEY'
-
     try:
         response = requests.get(url)
         if response.status_code not in range(200, 299):
@@ -78,10 +74,10 @@ def get_lat_long(data):
         print("Error on line 84:  Geocoding was not successful for the following reason: ", data['status'])
 
 
-def nearby_search(location, max_results=5):
+def nearby_search(location, keyword, max_results=5):
     search_data_type = 'json'
     search_endpoint = f'https://maps.googleapis.com/maps/api/place/nearbysearch/{search_data_type}'
-    params = {'location': location, 'radius': 8047, 'key': api_key,
+    params = {'location': location, 'radius': 8047, 'keyword': keyword, 'key': api_key,
               }
     url_params = urlencode(params)
     search_url = f'{search_endpoint}?{url_params}'
@@ -133,13 +129,13 @@ def sms_reply():
     user_input = request.form['Body']  # Users address
 
     if user_phone_number not in user_state:
-        user_state[user_phone_number] = 'waiting for address'  # Add user to state
+        user_state[user_phone_number] = {'state': 'waiting for address', 'keyword': user_input}  # Add user to state
         response = 'Welcome, what is your address?'
         resp = MessagingResponse()
         resp.message(response)
         return str(resp)
 
-    elif user_state[user_phone_number] == 'waiting for address':
+    elif user_state[user_phone_number]['state'] == 'waiting for address':
         try:
             user_address = f'{user_input}'  # user_input
             print(user_address)
@@ -147,7 +143,9 @@ def sms_reply():
             print(f'user_state response data: {data}')
             location = get_lat_long(data)
             print(f'user_state response location lat and lon: {location}')
-            response: str = nearby_search(str(location))  # This function is expecting a string
+            keyword = user_state[user_phone_number]['keyword']
+
+            response: str = nearby_search(str(location), keyword)  # This function is expecting a string
             print(response)
 
             resp = MessagingResponse()
