@@ -20,6 +20,19 @@ places_url = os.getenv('PLACES_API_URL')
 user_state = {}
 
 
+class UserState:
+    Waiting_For_Address = 'waiting_for_address'
+    Searching = 'searching'
+    SEARCHING_CONTINUE = 'searching_continue'
+    SEARCHING_FOR_NEW_BUSINESS = 'searching_for_new_business'
+    SEARCHING_NEW_ADDRESS = 'searching_new_address'
+    SEARCHING_RESULTS = 'searching_results'
+
+
+
+user_state = {}
+
+
 def get_json_data(user_address):
     """
     Retrieves JSON data from the geocode API using the provided user address.
@@ -34,10 +47,7 @@ def get_json_data(user_address):
         Exception: If the geocode API returns a non-200 status code.
 
     """
-    # params = {
-    #    'address': user_address,
-    #      'key': api_key,
-    # }
+
     data_type = 'json'
     endpoint = f'https://maps.googleapis.com/maps/api/geocode/{data_type}'
     params = {'address': user_address, 'key': api_key
@@ -126,38 +136,69 @@ def nearby_search(location, keyword, max_results=5):
 @app.route("/sms", methods=['GET', 'POST'])
 def sms_reply():
     user_phone_number = request.form['From']  # Users phone number
-    user_input = request.form['Body']  # Users address
+    user_input = request.form['Body'].strip().lower()  # Users address
 
     if user_phone_number not in user_state:
-        user_state[user_phone_number] = {'state': 'waiting for address', 'keyword': user_input}  # Add user to state
+        user_state[user_phone_number] = {'state': UserState.Waiting_For_Address,
+                                         'keyword': user_input}  # Add user to state
         response = 'Welcome, what is your address?'
-        resp = MessagingResponse()
-        resp.message(response)
-        return str(resp)
+    else:
+        if user_state[user_phone_number]['state'] == UserState.Waiting_For_Address:
+            user_state[user_phone_number]['address'] = user_input
+            user_state[user_phone_number]['state'] = UserState.Searching
 
-    elif user_state[user_phone_number]['state'] == 'waiting for address':
-        try:
-            user_address = f'{user_input}'  # user_input
-            print(user_address)
-            data = get_json_data(user_address)
-            print(f'user_state response data: {data}')
-            location = get_lat_long(data)
-            print(f'user_state response location lat and lon: {location}')
+            user_address = user_state[user_phone_number]['address']
             keyword = user_state[user_phone_number]['keyword']
 
-            response: str = nearby_search(str(location), keyword)  # This function is expecting a string
-            print(response)
+            try:
+                data = get_json_data(user_address)
+                print(f'user_state response data: {data}')
+                location = get_lat_long(data)
+                print(f'user_state response location lat and lon: {location}')
+                response: str = nearby_search(str(location), keyword)  # This function is expecting a string
+                print(response)
+                response += "\n\nDo you want to search for another business? Reply 'yes' or 'no'."
+                user_state[user_phone_number]['state'] = UserState.SEARCHING_CONTINUE
+            except Exception as e:
+                error_message = f"An error occurred: {str(e)}"
+                logging.error(error_message)
+                return error_message
+        else:
+            if user_state[user_phone_number]['state'] == UserState.SEARCHING_CONTINUE:
+                if user_input == 'yes':
+                    user_state[user_phone_number]['state'] = UserState.SEARCHING_FOR_NEW_BUSINESS
+                    response = 'Great, what new business would you like to search for?'
+                elif user_input == 'no':
+                    response = 'Okay, goodbye.'
+                    user_state.pop(user_phone_number)
+                else:
+                    response = 'Please reply with "yes" or "no".'
+            elif user_state[user_phone_number]['state'] == UserState.SEARCHING_FOR_NEW_BUSINESS:
+                user_state[user_phone_number]['new_business'] = user_input
+                user_state[user_phone_number]['state'] = UserState.SEARCHING_NEW_ADDRESS
+                response = 'What is your new address?'
 
-            resp = MessagingResponse()
-            print(resp)
-            resp.message(response)
-            print("line 122", resp)
+            elif user_state[user_phone_number]['state'] == UserState.SEARCHING_NEW_ADDRESS:
+                user_state[user_phone_number]['new_address'] = user_input
+                user_state[user_phone_number]['state'] = UserState.SEARCHING_RESULTS
 
-            return str(resp)
-        except Exception as e:
-            error_message = f"An error occurred: {str(e)}"
-            logging.error(error_message)
-            return error_message
+                new_business = user_state[user_phone_number]['new_business']
+                new_address = user_state[user_phone_number]['new_address']
+                try:
+                    data = get_json_data(new_address)
+                    location = get_lat_long(data)
+                    response: str = nearby_search(str(location), new_business)
+                except Exception as e:
+                    error_message = f"An error occurred: {str(e)}"
+                    logging.error(error_message)
+                    response = error_message
+
+                response += "\n\nDo you want to search for another business? Reply 'yes' or 'no'."
+                user_state[user_phone_number]['state'] = UserState.SEARCHING_CONTINUE
+
+    resp = MessagingResponse()
+    resp.message(response)
+    return str(resp)
 
 
 if __name__ == '__main__':
