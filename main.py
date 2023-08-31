@@ -14,135 +14,208 @@ Date: 8/12/2023
 Version: 1.0.0
 """
 
-import os
-import threading
-from queue import Queue
-from flask import Flask, request
-from twilio.twiml.messaging_response import MessagingResponse
-import requests
+import logging
 from dotenv import load_dotenv
-
-# Import constants from the separate file
-from constants import GEOCODE_API_URL, PLACES_API_URL, RADIUS_METERS, NUM_RESULTS, FLASK_PORT
-
-load_dotenv()
+from urllib.parse import urlencode
+from flask import Flask, request
+import requests
+import os
+from twilio.twiml.messaging_response import MessagingResponse
 
 app = Flask(__name__)
+load_dotenv()
+logging.basicConfig(level=logging.DEBUG)
 
-# Using a Queue to process incoming requests
-pending_requests = Queue()
+account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
+auth_token = os.environ.get('TWILIO_AUTH_TOKEN')
+radius = os.getenv('RADIUS_METERS')
+api_key = 'YOUR_API_KEY'  # os.environ.get('API_KEY')
+geocode_api_url = os.environ.get('GEOCODE_API_URL')
+places_url = os.getenv('PLACES_API_URL')
 
-# Load API key from environment variables
-API_KEY = os.environ.get('TWILIO_API_KEY')
+user_state = {}
 
-def handle_requests():
+
+class UserState:
+    Waiting_For_Address = 'waiting_for_address'
+    Searching = 'searching'
+    SEARCHING_CONTINUE = 'searching_continue'
+    SEARCHING_FOR_NEW_BUSINESS = 'searching_for_new_business'
+    SEARCHING_NEW_ADDRESS = 'searching_new_address'
+    SEARCHING_RESULTS = 'searching_results'
+
+
+
+user_state = {}
+
+
+def get_json_data(user_address):
     """
-    Threaded function to process pending requests from the queue.
-    Placeholder for actual processing logic.
+    Retrieves JSON data from the geocode API using the provided user address.
+
+    Args:
+        user_address (str): The address of the user.
+
+    Returns:
+        dict: The JSON data retrieved from the geocode API.
+
+    Raises:
+        Exception: If the geocode API returns a non-200 status code.
+
     """
-    try:
-        while True:
-            number, business_type = pending_requests.get()
-            # TODO: Process pending requests here (geocode address, search businesses, respond to user)
-            # I think core logic is missing here, but it is hard for me to tell because I do not know exactly how to
-            # test the Flask server once it comes up. 
-    except Exception as e:
-        # Handle exceptions and provide an informative error message
-        error_message = f"An error occurred in handle_requests: {str(e)}"
-        # You might want to log the error here
-        print(error_message)
 
-# Start the threaded request handler
-threading.Thread(target=handle_requests).start()
-
-def format_places_data(data):
-    """
-    Formats Google Places API response data into human-readable messages.
-    """
-    try:
-        stores = data.get('results', [])[:NUM_RESULTS]
-        messages = []
-
-        for store in stores:
-            name = store.get('name', "No name provided")
-            address = store.get('vicinity', "No address provided")
-            open_now = store.get('opening_hours', {}).get('open_now', False)
-            status = "Open" if open_now else "Closed"
-            message = f"{name} at {address} is currently {status}."
-            messages.append(message)
-
-        return "\n".join(messages)
-    except Exception as e:
-        # Handle exceptions and provide an informative error message
-        error_message = f"An error occurred while formatting places data: {str(e)}"
-        # You might want to log the error here
-        print(error_message)
-
-@app.route("/sms", methods=['POST'])
-def sms_reply():
-    # Get the message the user sent to the Twilio number
-    body = request.values.get('Body', None)
-
-    # Get the phone number the message was sent from
-    from_number = request.values.get('From', None)
-
-    # Create a Twilio response
-    resp = MessagingResponse()
+    data_type = 'json'
+    endpoint = f'https://maps.googleapis.com/maps/api/geocode/{data_type}'
+    params = {'address': user_address, 'key': api_key
+              }
+    url_params = urlencode(params)
+    url = f'{endpoint}?{url_params}'
 
     try:
-        if pending_requests.get(from_number, None):
-            # The user has already made a request and is now providing their address
-            address = body
-            business_type = pending_requests.get(from_number)
-
-            # Convert the address to coordinates using the Google Geocoding API
-            params = {
-                'key': API_KEY,
-                'address': address
-            }
-
-            geocode_response = requests.get(GEOCODE_API_URL, params=params)
-            geocode_data = geocode_response.json()
-
-            if geocode_data['status'] == 'OK':
-                location = geocode_data['results'][0]['geometry']['location']
-                lat = location['lat']
-                lng = location['lng']
-
-                # Search for businesses using the Google Places API
-                params = {
-                    'key': API_KEY,
-                    'location': f'{lat},{lng}',
-                    'radius': RADIUS_METERS,
-                    'keyword': business_type
-                }
-                places_response = requests.get(PLACES_API_URL, params=params)
-                places_data = places_response.json()
-
-                if places_data['status'] == 'OK' and places_data['results']:
-                    response_message = format_places_data(places_data)
-                else:
-                    response_message = f"No {business_type} found near {address}"
-            else:
-                response_message = f"Couldn't geocode the provided address: {address}"
+        response = requests.get(url)
+        if response.status_code not in range(200, 299):
+            raise Exception("Geocode API returned non-200 status code")
         else:
-            # This is a new request
-            business_name = body.lower()
-
-            # Store the request as pending
-            pending_requests.put((from_number, business_name))
-
-            response_message = "Please reply with your address."
+            data: dict = response.json()  # Converts the json as a python dict object
+        return data
     except Exception as e:
-        # Handle exceptions and provide an informative error message
-        response_message = f"An error occurred: {str(e)}"
-        # You might want to log the error here
-        print(response_message)
+        error_message = f"An error occurred getting a response from the geocode api on code block 54: {str(e)}"
+        logging.error(error_message)
+        return error_message
 
-    # Respond with a message
-    resp.message(response_message)
+
+def get_lat_long(data):
+    if data['status'] == 'OK':  # if status is okay, continue with operation
+        results = data['results']  # Accessing the results key in the json list
+        if results is not None:  # if the results it receives is not none
+            location = results[0]['geometry']['location']  # This accesses location dict from the first result in list
+            latitude = location['lat']
+            longitude = location['lng']
+
+            return f"{latitude}, {longitude}"  # returns latitude, longitude
+
+        else:
+            print("results == None. Line 86: No results found")
+    else:
+        print("Error on line 84:  Geocoding was not successful for the following reason: ", data['status'])
+
+
+def nearby_search(location, keyword, max_results=5):
+    search_data_type = 'json'
+    search_endpoint = f'https://maps.googleapis.com/maps/api/place/nearbysearch/{search_data_type}'
+    params = {'location': location, 'radius': 8047, 'keyword': keyword, 'key': api_key,
+              }
+    url_params = urlencode(params)
+    search_url = f'{search_endpoint}?{url_params}'
+    formatted_text = "Nearby places:\n"
+
+    try:
+        search_data = requests.get(search_url)
+        response = search_data.json()
+        print("line 62", response)
+
+        if response['status'] == 'OK':
+            print(f'line 99: {response["status"]}')
+
+            results = response.get('results', [])[:max_results]
+            print(f'line 100: {results}')
+            for result in results:
+                name = result['name']
+                print(name)
+                address = result['vicinity']
+                print(address)
+                opening_hours = result.get('opening_hours', [])
+                print(opening_hours)
+                if opening_hours:
+                    if opening_hours.get('open_now', False):
+                        hours = 'Open'
+                    else:
+                        hours = 'Closed'
+
+                else:
+                    hours = 'N/A'
+
+                rating = result.get('rating', 'N/A')
+                print(rating)
+                formatted_text += f'Name: {name}\nAddress: {address}\nHours: {hours}\nRating: {rating}\n'
+                print(formatted_text)
+                print("Line 90", formatted_text)
+            return formatted_text
+
+        else:
+            raise Exception
+    except Exception as e:
+        error_message = f"An error occurred: {str(e)}"
+        logging.error(error_message)
+
+
+@app.route("/sms", methods=['GET', 'POST'])
+def sms_reply():
+    user_phone_number = request.form['From']  # Users phone number
+    user_input = request.form['Body'].strip().lower()  # Users address
+
+    if user_phone_number not in user_state:
+        user_state[user_phone_number] = {'state': UserState.Waiting_For_Address,
+                                         'keyword': user_input}  # Add user to state
+        response = 'Welcome, what is your address?'
+    else:
+        if user_state[user_phone_number]['state'] == UserState.Waiting_For_Address:
+            user_state[user_phone_number]['address'] = user_input
+            user_state[user_phone_number]['state'] = UserState.Searching
+
+            user_address = user_state[user_phone_number]['address']
+            keyword = user_state[user_phone_number]['keyword']
+
+            try:
+                data = get_json_data(user_address)
+                print(f'user_state response data: {data}')
+                location = get_lat_long(data)
+                print(f'user_state response location lat and lon: {location}')
+                response: str = nearby_search(str(location), keyword)  # This function is expecting a string
+                print(response)
+                response += "\n\nDo you want to search for another business? Reply 'yes' or 'no'."
+                user_state[user_phone_number]['state'] = UserState.SEARCHING_CONTINUE
+            except Exception as e:
+                error_message = f"An error occurred: {str(e)}"
+                logging.error(error_message)
+                return error_message
+        else:
+            if user_state[user_phone_number]['state'] == UserState.SEARCHING_CONTINUE:
+                if user_input == 'yes':
+                    user_state[user_phone_number]['state'] = UserState.SEARCHING_FOR_NEW_BUSINESS
+                    response = 'Great, what new business would you like to search for?'
+                elif user_input == 'no':
+                    response = 'Okay, goodbye.'
+                    user_state.pop(user_phone_number)
+                else:
+                    response = 'Please reply with "yes" or "no".'
+            elif user_state[user_phone_number]['state'] == UserState.SEARCHING_FOR_NEW_BUSINESS:
+                user_state[user_phone_number]['new_business'] = user_input
+                user_state[user_phone_number]['state'] = UserState.SEARCHING_NEW_ADDRESS
+                response = 'What is your new address?'
+
+            elif user_state[user_phone_number]['state'] == UserState.SEARCHING_NEW_ADDRESS:
+                user_state[user_phone_number]['new_address'] = user_input
+                user_state[user_phone_number]['state'] = UserState.SEARCHING_RESULTS
+
+                new_business = user_state[user_phone_number]['new_business']
+                new_address = user_state[user_phone_number]['new_address']
+                try:
+                    data = get_json_data(new_address)
+                    location = get_lat_long(data)
+                    response: str = nearby_search(str(location), new_business)
+                except Exception as e:
+                    error_message = f"An error occurred: {str(e)}"
+                    logging.error(error_message)
+                    response = error_message
+
+                response += "\n\nDo you want to search for another business? Reply 'yes' or 'no'."
+                user_state[user_phone_number]['state'] = UserState.SEARCHING_CONTINUE
+
+    resp = MessagingResponse()
+    resp.message(response)
     return str(resp)
 
-if __name__ == "__main__":
-    # Start the Flask app
-    app.run(debug=True, port=FLASK_PORT)
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
