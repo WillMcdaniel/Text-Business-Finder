@@ -9,6 +9,7 @@ Before running the application, make sure you have the following:
 - Python 3.9 or higher installed
 - Twilio account and API credentials
 - Google Maps API key
+- ngrok for local testing
 - Docker (optional, for containerization)
 
 ## Directory Layout
