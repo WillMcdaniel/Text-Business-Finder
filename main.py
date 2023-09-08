@@ -31,7 +31,7 @@ logging.basicConfig(level=logging.DEBUG)
 account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
 auth_token = os.environ.get('TWILIO_AUTH_TOKEN')
 radius = os.getenv('RADIUS_METERS')
-api_key = 'Your_API_KEY'  # os.environ.get('API_KEY')
+api_key = os.environ.get('API_KEY')
 geocode_api_url = os.environ.get('GEOCODE_API_URL')
 places_url = os.getenv('PLACES_API_URL')
 
